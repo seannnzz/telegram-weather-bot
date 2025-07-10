@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: sg-weather-bot
+    env: python
+    plan: free
+    region: singapore
+    buildCommand: ""
+    startCommand: python main.py
+    envVars:
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false  # You’ll set this securely in the Render dashboard
