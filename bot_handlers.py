@@ -30,7 +30,7 @@ Welcome! I provide real-time weather data from Singapore's government APIs.
 /rainfall [station|all] - Get rainfall data
 /windspeed [station|all] - Get wind speed data  
 /winddirection [station|all] - Get wind direction data
-/wind - Get complete wind data from all stations
+/wind [station|all] - Get complete wind data
 /stations - List all available stations
 /help - Show detailed help message
 
@@ -39,7 +39,8 @@ Welcome! I provide real-time weather data from Singapore's government APIs.
 • `/rainfall marina` - Rainfall at Marina area
 • `/rainfall all` - All stations with rainfall data
 • `/windspeed S108` - Wind speed at station S108
-• `/wind` - Complete wind data from all stations
+• `/wind marina` - Complete wind data for Marina area
+• `/wind all` - Complete wind data from all stations
 
 Type /menu for an interactive interface or /help for detailed instructions.
 """
@@ -81,9 +82,11 @@ async def help_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 • With `all`: Shows all stations with wind direction data
 • Unit: degrees (with compass direction)
 
-🌬️ `/wind` - Complete wind data from all stations
-• Shows both wind speed and direction for all stations
-• Combined view of all wind monitoring stations
+🌬️ `/wind [station|all]` - Complete wind data  
+• Without station: Shows overall wind summary
+• With station: Shows specific station wind speed and direction
+• With `all`: Shows all stations with complete wind data
+• Combined view of wind speed and direction
 
 📍 `/stations` - List all monitoring stations
 • Shows station IDs, names, and locations
@@ -747,8 +750,14 @@ async def stations_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 async def wind_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /wind command - shows both windspeed and winddirection from all stations"""
-    await update.message.reply_text("🔄 Fetching wind data from all stations...")
+    """Handle /wind command - shows both windspeed and winddirection from all stations or specific station"""
+    # Check if user specified a station or "all"
+    station_query = ' '.join(context.args).strip() if context.args else None
+    
+    if station_query:
+        await update.message.reply_text(f"🔄 Fetching wind data for '{station_query}'...")
+    else:
+        await update.message.reply_text("🔄 Fetching wind data from all stations...")
     
     try:
         async with WeatherAPI() as api:
@@ -763,19 +772,6 @@ async def wind_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     parse_mode=ParseMode.MARKDOWN
                 )
                 return
-            
-            # Create combined wind data display
-            message = "🌬️ **Complete Wind Data (All Stations)**\n\n"
-            
-            # Get timestamp from available data
-            timestamp = None
-            if wind_speed_data:
-                timestamp = api.format_timestamp(wind_speed_data['data']['readings'][0]['timestamp'])
-            elif wind_direction_data:
-                timestamp = api.format_timestamp(wind_direction_data['data']['readings'][0]['timestamp'])
-            
-            if timestamp:
-                message += f"📅 **Time**: {timestamp}\n\n"
             
             # Collect all wind station data
             wind_stations = {}
@@ -806,28 +802,154 @@ async def wind_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             'direction_text': get_wind_direction_text(direction) if direction is not None else None
                         }
             
-            # Sort stations by name
-            sorted_stations = sorted(wind_stations.items(), key=lambda x: x[1]['name'])
+            # Get timestamp from available data
+            timestamp = None
+            if wind_speed_data:
+                timestamp = api.format_timestamp(wind_speed_data['data']['readings'][0]['timestamp'])
+            elif wind_direction_data:
+                timestamp = api.format_timestamp(wind_direction_data['data']['readings'][0]['timestamp'])
             
-            # Build message with all wind data
-            for station_id, data in sorted_stations:
-                message += f"📍 **{data['name']}** ({station_id})\n"
+            if station_query and station_query.lower() == "all":
+                # Show all stations data
+                message = "🌬️ **Complete Wind Data (All Stations)**\n\n"
+                if timestamp:
+                    message += f"📅 **Time**: {timestamp}\n\n"
                 
-                # Wind speed
-                if data['speed'] is not None:
-                    message += f"💨 Speed: {data['speed']:.1f} knots"
+                # Sort stations by name
+                sorted_stations = sorted(wind_stations.items(), key=lambda x: x[1]['name'])
+                
+                # Build message with all wind data
+                for station_id, data in sorted_stations:
+                    message += f"📍 **{data['name']}** ({station_id})\n"
+                    
+                    # Wind speed
+                    if data['speed'] is not None:
+                        message += f"💨 Speed: {data['speed']:.1f} knots"
+                    else:
+                        message += "💨 Speed: No data"
+                    
+                    # Wind direction
+                    if data['direction'] is not None:
+                        message += f" | 🧭 Direction: {data['direction']}° ({data['direction_text']})\n"
+                    else:
+                        message += " | 🧭 Direction: No data\n"
+                    
+                    message += "\n"
+                
+                message += "💡 *Use `/wind [station]` for specific station details*"
+                
+            elif station_query:
+                # Find specific station
+                station_id = STATION_ALIASES.get(station_query.lower())
+                target_station = None
+                target_station_id = None
+                
+                if station_id and station_id in wind_stations:
+                    target_station = wind_stations[station_id]
+                    target_station_id = station_id
                 else:
-                    message += "💨 Speed: No data"
+                    # Search by name or ID
+                    for sid, station_data in wind_stations.items():
+                        if (station_query.lower() in station_data['name'].lower() or 
+                            station_query.upper() == sid):
+                            target_station = station_data
+                            target_station_id = sid
+                            break
                 
-                # Wind direction
-                if data['direction'] is not None:
-                    message += f" | 🧭 Direction: {data['direction']}° ({data['direction_text']})\n"
+                if not target_station:
+                    await update.message.reply_text(
+                        f"❌ **Station not found**: '{station_query}'\n\n"
+                        "Wind data is only available at selected stations.\n"
+                        "Use /stations to see available stations or try `all` to see all stations.",
+                        parse_mode=ParseMode.MARKDOWN
+                    )
+                    return
+                
+                # Build message for specific station
+                message = f"🌬️ **Wind Data - {target_station['name']}**\n\n"
+                message += f"📍 **Station**: {target_station['name']} ({target_station_id})\n"
+                if timestamp:
+                    message += f"📅 **Time**: {timestamp}\n\n"
+                
+                # Wind speed details
+                if target_station['speed'] is not None:
+                    message += f"💨 **Wind Speed**: {target_station['speed']:.1f} knots\n"
+                    
+                    # Wind speed categories (Beaufort scale approximation)
+                    if target_station['speed'] < 1:
+                        message += "🌬️ *Calm*\n"
+                    elif target_station['speed'] < 7:
+                        message += "🍃 *Light breeze*\n"
+                    elif target_station['speed'] < 17:
+                        message += "💨 *Moderate breeze*\n"
+                    elif target_station['speed'] < 28:
+                        message += "🌪️ *Strong breeze*\n"
+                    else:
+                        message += "⛈️ *Very strong wind*\n"
                 else:
-                    message += " | 🧭 Direction: No data\n"
+                    message += "💨 **Wind Speed**: No data\n"
                 
-                message += "\n"
-            
-            message += "💡 *Use `/windspeed [station]` or `/winddirection [station]` for specific details*"
+                # Wind direction details
+                if target_station['direction'] is not None:
+                    message += f"🧭 **Wind Direction**: {target_station['direction']}° ({target_station['direction_text']})\n"
+                    
+                    # Add compass emoji based on direction
+                    direction = target_station['direction']
+                    if 337.5 <= direction or direction < 22.5:
+                        message += "⬆️ *Wind from North*\n"
+                    elif 22.5 <= direction < 67.5:
+                        message += "↗️ *Wind from Northeast*\n"
+                    elif 67.5 <= direction < 112.5:
+                        message += "➡️ *Wind from East*\n"
+                    elif 112.5 <= direction < 157.5:
+                        message += "↘️ *Wind from Southeast*\n"
+                    elif 157.5 <= direction < 202.5:
+                        message += "⬇️ *Wind from South*\n"
+                    elif 202.5 <= direction < 247.5:
+                        message += "↙️ *Wind from Southwest*\n"
+                    elif 247.5 <= direction < 292.5:
+                        message += "⬅️ *Wind from West*\n"
+                    elif 292.5 <= direction < 337.5:
+                        message += "↖️ *Wind from Northwest*\n"
+                else:
+                    message += "🧭 **Wind Direction**: No data\n"
+                
+                message += "\n💡 *Use `/wind all` to see all stations or `/wind [station]` for other stations*"
+                
+            else:
+                # Show overall summary
+                message = "🌬️ **Wind Data Summary**\n\n"
+                if timestamp:
+                    message += f"📅 **Time**: {timestamp}\n\n"
+                
+                # Calculate summary statistics
+                speed_values = [data['speed'] for data in wind_stations.values() if data['speed'] is not None]
+                direction_values = [data['direction'] for data in wind_stations.values() if data['direction'] is not None]
+                
+                if speed_values:
+                    avg_speed = sum(speed_values) / len(speed_values)
+                    max_speed = max(speed_values)
+                    min_speed = min(speed_values)
+                    
+                    message += f"💨 **Wind Speed Statistics**:\n"
+                    message += f"• Average: {avg_speed:.1f} knots\n"
+                    message += f"• Range: {min_speed:.1f} - {max_speed:.1f} knots\n"
+                    message += f"• Active stations: {len(speed_values)}\n\n"
+                    
+                    # Show top 3 stations with highest wind speed
+                    station_speeds = [(data['name'], data['speed']) for data in wind_stations.values() if data['speed'] is not None]
+                    station_speeds.sort(key=lambda x: x[1], reverse=True)
+                    
+                    if station_speeds:
+                        message += "🏆 **Highest Wind Speed Locations**:\n"
+                        for i, (name, speed) in enumerate(station_speeds[:3], 1):
+                            message += f"{i}. {name}: {speed:.1f} knots\n"
+                        message += "\n"
+                
+                if direction_values:
+                    message += f"🧭 **Wind Direction Data**: Available from {len(direction_values)} stations\n\n"
+                
+                message += "💡 *Use `/wind [station]` for specific station data or `/wind all` to see all stations*"
             
             # Split message if too long
             if len(message) > MAX_MESSAGE_LENGTH:
